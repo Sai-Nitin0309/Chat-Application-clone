@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { useDispatch, useSelector } from "react-redux"
+import { setActiveUser } from "./counterSlice"
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -7,7 +9,6 @@ export default function LoginPage() {
   const [isHovered, setIsHovered] = useState(false);
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
 
-  // Inject animations into the page
   useEffect(() => {
     const styleId = 'login-animations';
 
@@ -58,10 +59,19 @@ export default function LoginPage() {
   }, []);
 
   const handleSubmit = (e) => {
-    e.preventDefault();
-    console.log('Login attempted with:', { email, password });
-    // Add your login logic here
-  };
+  e.preventDefault()
+
+  const user = users.find(
+    (u) => u.email === email && u.password === password
+  )
+
+  if(user){
+    dispatch(setActiveUser(user))
+    alert("Login Successful")
+  }else{
+    alert("Invalid email or password")
+  }
+}
 
   const handleMouseMove = (e) => {
     const card = e.currentTarget;
@@ -72,7 +82,6 @@ export default function LoginPage() {
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
 
-    // Reduced from 15 to 6 for subtler tilt effect
     const rotateX = ((y - centerY) / centerY) * -6;
     const rotateY = ((x - centerX) / centerX) * 6;
 
@@ -85,21 +94,17 @@ export default function LoginPage() {
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden flex items-center justify-center">
-      {/* Background Image */}
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{ backgroundImage: "url('/src/images/login 3.jpg')" }}
       />
 
-      {/* Overlay */}
       <div className="absolute inset-0 bg-black/5" />
 
-      {/* Animated Background Glows */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl animate-pulse-glow" />
       <div className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-blue-500/20 rounded-full blur-3xl animate-pulse-glow animation-delay-2000" />
       <div className="absolute top-1/2 right-1/3 w-64 h-64 bg-purple-500/15 rounded-full blur-3xl animate-pulse-glow animation-delay-4000" />
 
-      {/* Login Card with 3D Perspective */}
       <div className="relative z-10 w-full max-w-md mx-4 animate-fadeIn" style={{ perspective: '1000px' }}>
         <div
           onMouseMove={handleMouseMove}
@@ -112,7 +117,6 @@ export default function LoginPage() {
             transition: 'transform 0.2s ease-out'
           }}
         >
-          {/* Dynamic Light Reflection */}
           <div
             className="absolute inset-0 rounded-3xl transition-opacity duration-300 pointer-events-none"
             style={{
@@ -121,7 +125,6 @@ export default function LoginPage() {
             }}
           />
 
-          {/* Welcome Heading */}
           <h1 
             className="text-center font-bold uppercase tracking-wide mb-5 text-white text-lg"
             style={{ transform: 'translateZ(25px)' }}
@@ -129,7 +132,6 @@ export default function LoginPage() {
             Welcome to Chat Application
           </h1>
           
-          {/* Title */}
           <h1
             className="text-4xl font-bold text-center mb-10 tracking-wider animate-slideDown"
             style={{
@@ -144,9 +146,7 @@ export default function LoginPage() {
             LOGIN
           </h1>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Email Input */}
             <div className="relative group" style={{ transform: 'translateZ(20px)' }}>
               <input
                 type="email"
@@ -160,7 +160,6 @@ export default function LoginPage() {
               <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 group-hover:animate-shimmer pointer-events-none" />
             </div>
 
-            {/* Password Input */}
             <div className="relative group" style={{ transform: 'translateZ(20px)' }}>
               <input
                 type="password"
@@ -174,7 +173,6 @@ export default function LoginPage() {
               <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 group-hover:animate-shimmer pointer-events-none" />
             </div>
 
-            {/* Login Button */}
             <div style={{ transform: 'translateZ(40px)' }}>
               <button
                 type="submit"
@@ -192,7 +190,6 @@ export default function LoginPage() {
             </div>
           </form>
 
-          {/* Register Link */}
           <div
             className="mt-8 text-center animate-fadeIn"
             style={{
