@@ -13,7 +13,6 @@ export const chatSlice = createSlice({
   initialState,
   reducers: {
 
-    // loading states for IndexedDB operations
     setLoading: (state, action) => {
       state.loading = action.payload
     },
@@ -23,13 +22,11 @@ export const chatSlice = createSlice({
       state.loading = false
     },
 
-    // load messages from IndexedDB
     setMessages: (state, action) => {
       state.messages = action.payload
       state.loading = false
     },
 
-    // add message locally after saving in IndexedDB
     addMessage: (state, action) => {
       state.messages.push(action.payload)
     },
