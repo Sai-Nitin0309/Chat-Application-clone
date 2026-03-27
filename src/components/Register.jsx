@@ -1,8 +1,9 @@
 import { useState, useRef } from "react"
-import chatting from "./images/Chatting.png"
+import chatting from "../images/Chatting.png"
 import { useDispatch } from "react-redux"
-import { addUser } from "./counterSlice"
-import { registerUserService } from "./services/userService"
+import { addUser } from "../counterSlice"
+import { registerUserService } from "../services/userService"
+import { useNavigate } from "react-router-dom"
 
 const styles = `
 @keyframes gradientBG {
@@ -25,49 +26,55 @@ const styles = `
 }
 `
 
-function Register(){
+function Register() {
 
   const dispatch = useDispatch()
 
-  const [name,setName] = useState("")
-  const [email,setEmail] = useState("")
-  const [password,setPassword] = useState("")
-  const [confirmPassword,setConfirmPassword] = useState("")
-  const [image,setImage] = useState(null)
+  const [name, setName] = useState("")
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [profileImage, setprofileImage] = useState(null)
+  const [selectedFile, setSelectedFile] = useState(null)
+  const navigate = useNavigate()
+
 
   const cardRef = useRef(null)
 
-  function handleMouseMove(e){
+  function handleMouseMove(e) {
     const card = cardRef.current
-    if(!card) return
+    if (!card) return
 
     const rect = card.getBoundingClientRect()
-    const rotateX = ((e.clientY - rect.top - rect.height/2)/(rect.height/2))*-10
-    const rotateY = ((e.clientX - rect.left - rect.width/2)/(rect.width/2))*10
+    const rotateX = ((e.clientY - rect.top - rect.height / 2) / (rect.height / 2)) * -10
+    const rotateY = ((e.clientX - rect.left - rect.width / 2) / (rect.width / 2)) * 10
 
     card.style.transform = `perspective(900px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale(1.02)`
   }
 
-  function handleMouseLeave(){
+  function handleMouseLeave() {
     const card = cardRef.current
-    if(!card) return
+    if (!card) return
     card.style.transform = `perspective(900px) rotateX(0deg) rotateY(0deg) scale(1)`
   }
 
-  function handleImage(e){
+  function handleImage(e) {
     const file = e.target.files[0]
-    if(file) setImage(URL.createObjectURL(file))
+    if (file) {
+      setSelectedFile(file)
+      setprofileImage(URL.createObjectURL(file))
+    }
   }
 
   // ✅ FINAL HANDLE SUBMIT
-  async function handleSubmit(){
+  async function handleSubmit() {
 
-    if(!name || !email || !password || !confirmPassword){
+    if (!name || !email || !password || !confirmPassword) {
       alert("Please fill all fields")
       return
     }
 
-    if(password !== confirmPassword){
+    if (password !== confirmPassword) {
       alert("Passwords do not match")
       return
     }
@@ -76,7 +83,7 @@ function Register(){
       name,
       email,
       password,
-      image
+      profileImage: selectedFile
     }
 
     try {
@@ -92,15 +99,19 @@ function Register(){
       setEmail("")
       setPassword("")
       setConfirmPassword("")
-      setImage(null)
+      setprofileImage(null)
+      setSelectedFile(null)
+      navigate("/otp", { state: { email: email } })
+
 
     } catch (error) {
       console.error(error)
-      alert("Registration Failed")
+      const serverMessage = error.response?.data?.message || "Registration Failed";
+      alert(serverMessage);
     }
   }
 
-  return(
+  return (
     <>
       <style>{styles}</style>
 
@@ -120,7 +131,7 @@ function Register(){
             </h1>
 
             <div className="bg-white border rounded-xl overflow-hidden mb-6">
-              <img src={chatting} alt="chat" className="w-full h-[200px] object-contain"/>
+              <img src={chatting} alt="chat" className="w-full h-[200px] object-contain" />
             </div>
 
             <h2 className="text-center text-sm font-bold mb-4">
@@ -135,7 +146,7 @@ function Register(){
                   type="text"
                   placeholder="Enter your name"
                   value={name}
-                  onChange={(e)=>setName(e.target.value)}
+                  onChange={(e) => setName(e.target.value)}
                   className="p-2 rounded-lg shadow outline-none"
                 />
 
@@ -143,7 +154,7 @@ function Register(){
                   type="email"
                   placeholder="Enter your mail"
                   value={email}
-                  onChange={(e)=>setEmail(e.target.value)}
+                  onChange={(e) => setEmail(e.target.value)}
                   className="p-2 rounded-lg shadow outline-none"
                 />
 
@@ -151,7 +162,7 @@ function Register(){
                   type="password"
                   placeholder="Enter password"
                   value={password}
-                  onChange={(e)=>setPassword(e.target.value)}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="p-2 rounded-lg shadow outline-none"
                 />
 
@@ -159,7 +170,7 @@ function Register(){
                   type="password"
                   placeholder="Confirm password"
                   value={confirmPassword}
-                  onChange={(e)=>setConfirmPassword(e.target.value)}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
                   className="p-2 rounded-lg shadow outline-none"
                 />
 
@@ -169,8 +180,8 @@ function Register(){
 
                 <div className="bg-blue-100 h-[130px] rounded-xl flex items-center justify-center">
 
-                  {image ? (
-                    <img src={image} className="w-full h-full object-contain rounded-xl"/>
+                  {profileImage ? (
+                    <img src={profileImage} className="w-full h-full object-contain rounded-xl" />
                   ) : (
                     <label className="cursor-pointer text-xs text-center">
                       Upload Image
