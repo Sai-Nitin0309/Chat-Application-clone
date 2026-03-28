@@ -185,10 +185,23 @@ export default function HomePage() {
         return user?.name || user?.email?.split('@')[0] || "User";
     };
 
-    const getProfilePic = (pic) => {
-        if (!pic) return null;
-        if (pic.startsWith('http')) return pic;
-        return `http://192.168.0.54:5000/${pic}`;
+    const getProfilePic = (user) => {
+        if (!user) return null;
+        if (user.profileImage && user.profileImage.data && user.profileImage.data.data) {
+            const buffer = user.profileImage.data.data;
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return `data:${user.profileImage.contentType};base64,${window.btoa(binary)}`;
+        }
+        if (user.profilePic) {
+            if (user.profilePic.startsWith('http')) return user.profilePic;
+            return `http://192.168.0.54:5000/${user.profilePic}`;
+        }
+        return null;
     };
 
     return (
@@ -212,8 +225,8 @@ export default function HomePage() {
                         <div className="relative">
                             <div className="w-14 h-14 rounded-[22px] bg-gradient-to-tr from-cyan-400 to-indigo-600 p-[2px] shadow-2xl shadow-cyan-500/20 group-hover:scale-105 transition-transform duration-500">
                                 <div className="w-full h-full rounded-[20px] bg-slate-900 flex items-center justify-center font-black overflow-hidden">
-                                    {getProfilePic(activeUser?.profilePic) ? (
-                                        <img src={getProfilePic(activeUser.profilePic)} alt="Profile" className="w-full h-full object-cover" />
+                                    {getProfilePic(activeUser) ? (
+                                        <img src={getProfilePic(activeUser)} alt="Profile" className="w-full h-full object-cover" />
                                     ) : (
                                         <span className="text-transparent bg-clip-text bg-gradient-to-tr from-cyan-300 to-indigo-300 text-2xl">
                                             {getInitials(activeUser)}
@@ -448,14 +461,8 @@ export default function HomePage() {
 
                         <div className="relative mb-14 group cursor-pointer" onClick={() => setShowProfile(true)}>
                             <div className="absolute inset-0 bg-cyan-400/20 rounded-[3rem] blur-3xl animate-pulse group-hover:bg-cyan-400/40 transition-all duration-1000 scale-[1.3]" />
-                            <div className="w-44 h-44 bg-gradient-to-tr from-[#0a0f1e] to-slate-800 rounded-[3rem] flex items-center justify-center shadow-2xl relative z-10 animate-float border border-white/10 overflow-hidden">
-                                {getProfilePic(activeUser?.profilePic) ? (
-                                    <img src={getProfilePic(activeUser.profilePic)} className="w-full h-full object-cover" alt="Me" />
-                                ) : (
-                                    <span className="text-7xl font-black text-transparent bg-clip-text bg-gradient-to-tr from-cyan-300 to-indigo-400">
-                                        {getInitials(activeUser)}
-                                    </span>
-                                )}
+                            <div className="w-44 h-44 bg-gradient-to-tr from-[#0a0f1e] to-slate-800 rounded-[3rem] flex items-center justify-center shadow-2xl relative z-10 animate-float border border-white/10 overflow-hidden text-7xl font-black text-transparent bg-clip-text bg-gradient-to-tr from-cyan-300 to-indigo-400">
+                                💬
                             </div>
                         </div>
 
@@ -495,8 +502,8 @@ export default function HomePage() {
                         <div className="pt-16 pb-12 px-10 text-center">
                             <div className="w-32 h-32 mx-auto rounded-[32px] bg-gradient-to-tr from-cyan-400 to-indigo-600 p-1 mb-6 shadow-2xl shadow-cyan-500/20">
                                 <div className="w-full h-full rounded-[28px] bg-slate-900 flex items-center justify-center overflow-hidden">
-                                    {getProfilePic(activeUser?.profilePic) ? (
-                                        <img src={getProfilePic(activeUser.profilePic)} alt="User" className="w-full h-full object-cover" />
+                                    {getProfilePic(activeUser) ? (
+                                        <img src={getProfilePic(activeUser)} alt="User" className="w-full h-full object-cover" />
                                     ) : (
                                         <span className="text-4xl font-black text-white">{getInitials(activeUser)}</span>
                                     )}

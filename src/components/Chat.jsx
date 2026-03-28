@@ -148,10 +148,23 @@ const Chat = () => {
 
     const isMine = (name) => name === userName;
 
-    const getProfilePic = (pic) => {
-        if (!pic) return null;
-        if (pic.startsWith('http')) return pic;
-        return `http://192.168.0.54:5000/${pic}`;
+    const getProfilePic = (user) => {
+        if (!user) return null;
+        if (user.profileImage && user.profileImage.data && user.profileImage.data.data) {
+            const buffer = user.profileImage.data.data;
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return `data:${user.profileImage.contentType};base64,${window.btoa(binary)}`;
+        }
+        if (user.profilePic) {
+            if (user.profilePic.startsWith('http')) return user.profilePic;
+            return `http://192.168.0.54:5000/${user.profilePic}`;
+        }
+        return null;
     };
 
     return (
@@ -161,8 +174,8 @@ const Chat = () => {
             <div className="flex items-center justify-between px-8 py-5 bg-slate-900/50 backdrop-blur-xl border-b border-white/5 shadow-2xl z-20">
                 <div className="flex items-center gap-4 group">
                     <div className="w-11 h-11 rounded-[14px] bg-gradient-to-tr from-cyan-400 to-indigo-600 flex items-center justify-center text-white text-xl shadow-lg shadow-cyan-500/20 group-hover:scale-105 transition-transform duration-300 overflow-hidden">
-                        {getProfilePic(activeUser?.profilePic) ? (
-                            <img src={getProfilePic(activeUser.profilePic)} alt="Me" className="w-full h-full object-cover" />
+                        {getProfilePic(activeUser) ? (
+                            <img src={getProfilePic(activeUser)} alt="Me" className="w-full h-full object-cover" />
                         ) : (
                             "⚡"
                         )}
