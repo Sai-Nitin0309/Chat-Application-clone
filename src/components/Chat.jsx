@@ -1,281 +1,490 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { useSelector } from 'react-redux';
+import React, { useState, useEffect, useRef } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import { useCollection } from 'ikago';
+import { getConversationId } from '../services/ikagoDb';
+import { setSelectedContact } from '../counterSlice';
 
-// Replace with your backend server URL
-const socket = io("https://mes-ioa3.onrender.com/");
-// const socket = io("http://localhost:5000");
+const SOCKET_URL = "https://mes-ioa3.onrender.com/";
+const socket = io(SOCKET_URL);
 
+// Helper: safely get MongoDB id (handles both _id and id)
+const getId = (u) => u?._id || u?.id || null;
 
 const Chat = () => {
-    // Get the logged-in user details from Redux
-    const { activeUser } = useSelector((state) => state.chat);
+    const navigate = useNavigate();
+    const dispatch = useDispatch();
+    const { activeUser, selectedContact } = useSelector((s) => s.chat);
 
-    // Fallback if no user is found
-    const [userName] = useState(activeUser?.name || activeUser?.email?.split('@')[0] || "Guest");
+    const messagesStore = useCollection("messages");
+    const contactsStore = useCollection("contacts");
 
-    const [mes, setMsg] = useState({ userName: userName, msg: "" });
-    const [allMsg, setAllMsg] = useState([]);
-    const [typing, setTyping] = useState(false);
-    const [userTyping, setUserTyping] = useState(false);
-    const [connected, setConnected] = useState(false);
-    const [animIds, setAnimIds] = useState(new Set());
-
-    const bottomRef = useRef(null);
-    const typingTimer = useRef(null);
+    // --- Stable refs for socket closures ---
+    const msgsRef = useRef(null);
+    const contactsRef = useRef(null);
+    const meRef = useRef(activeUser);
+    const contactRef = useRef(selectedContact);
+    const pendingRef = useRef([]);
     const inputRef = useRef(null);
+    const bottomRef = useRef(null);
 
-    // Socket events
+    useEffect(() => { msgsRef.current = messagesStore; }, [messagesStore]);
+    useEffect(() => { contactsRef.current = contactsStore; }, [contactsStore]);
+    useEffect(() => { meRef.current = activeUser; }, [activeUser]);
+    useEffect(() => { contactRef.current = selectedContact; }, [selectedContact]);
+
+    // --- State ---
+    const [messages, setMessages] = useState([]);
+    const [input, setInput] = useState('');
+    const [connected, setConnected] = useState(socket.connected);
+    const [onlineUsers, setOnlineUsers] = useState([]);
+    const [sendError, setSendError] = useState('');
+
+    // --- Guard: redirect if no user/contact ---
     useEffect(() => {
-        if (connected && activeUser?._id) {
-            // Tell the server we are online
-            socket.emit("user-online", activeUser._id);
-            // Join a default room (can be dynamic later)
-            socket.emit("join-room", { roomId: "main", userId: activeUser._id });
-        }
-    }, [connected, activeUser]);
+        if (!activeUser) { navigate('/'); return; }
+        if (!selectedContact) { navigate('/home'); return; }
+    }, [activeUser, selectedContact, navigate]);
 
+    // --- Conversation key ---
+    const myId = getId(activeUser);
+    const contactId = selectedContact?.userId || null;
+    const convId = myId && contactId ? getConversationId(myId, contactId) : null;
+
+    // --- Load history from IndexedDB ---
     useEffect(() => {
-        socket.on("connect", () => setConnected(true));
-        socket.on("disconnect", () => setConnected(false));
+        if (!convId || !messagesStore) { setMessages([]); return; }
+        messagesStore
+            .where((m) => m.conversationId === convId)
+            .then((msgs) => setMessages([...msgs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))))
+            .catch(() => { });
+    }, [convId, messagesStore]);
 
-        // Listen for group messages (room chat)
-        socket.on("receiveMessage", (data) => {
-            const id = Date.now() + Math.random();
-            setAllMsg(prev => [...prev, {
-                userName: data.senderId === activeUser?._id ? userName : "Other User",
-                msg: data.content,
-                type: data.type || "text",
-                id
-            }]);
+    // --- Auto-scroll ---
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
 
-            // For entrance animation
-            setAnimIds(prev => new Set([...prev, id]));
-            setTimeout(() => {
-                setAnimIds(prev => { const n = new Set(prev); n.delete(id); return n; });
-            }, 500);
-        });
+    // --- Socket (dep: only activeUser; everything else via refs) ---
+    useEffect(() => {
+        if (!activeUser) return;
 
-        // Listen for private messages
-        socket.on("receive-private-message", (data) => {
-            const id = Date.now() + Math.random();
-            setAllMsg(prev => [...prev, {
-                userName: data.fromName || data.fromEmail || "Private User",
-                msg: data.message,
-                type: data.type || "text",
-                id,
-                isPrivate: true
-            }]);
-        });
+        const myIdNow = getId(activeUser);
 
-        socket.on("typing", (val) => setUserTyping(val));
+        const emitOnline = () => {
+            if (myIdNow) socket.emit('user-online', myIdNow);
+        };
+
+        if (socket.connected) { setConnected(true); emitOnline(); }
+
+        const onConnect = () => { setConnected(true); emitOnline(); };
+        const onDisconnect = () => setConnected(false);
+        const onStatus = (d) => setOnlineUsers(d.onlineUsers || []);
+
+        const onPrivateMsg = async (data) => {
+            const me = meRef.current;
+            const contact = contactRef.current;
+            const mDB = msgsRef.current;
+            const cDB = contactsRef.current;
+
+            const senderId = data.fromUserId || data.senderId;
+            if (!me || !senderId) {
+                console.warn('[Chat] receive-private-message missing senderId', data);
+                return;
+            }
+
+            const meId = getId(me);
+            const cId = getConversationId(meId, senderId);
+            const isHere = senderId === contact?.userId;
+            const timestamp = data.createdAt
+                ? new Date(data.createdAt).toISOString()
+                : new Date().toISOString();
+
+            // --- Always update UI immediately (no DB dependency) ---
+            if (isHere) {
+                setMessages((prev) => [
+                    ...prev,
+                    { id: Date.now() + Math.random(), text: data.message, type: data.type || 'text', timestamp, fileName: data.fileName || null, isMe: false },
+                ]);
+            }
+
+            // --- Persist to IndexedDB in background ---
+            if (mDB) {
+                try {
+                    await mDB.add({ conversationId: cId, fromUserId: senderId, toUserId: meId, text: data.message, type: data.type || 'text', timestamp, isMe: false });
+                } catch (_) { }
+            }
+
+            // --- Auto-save contact ---
+            if (cDB && senderId) {
+                try {
+                    const existing = await cDB.where((c) => c.userId === senderId);
+                    if (!existing.length) {
+                        await cDB.add({ userId: senderId, email: data.fromEmail || senderId, name: data.fromName || 'Unknown', unread: isHere ? 0 : 1 });
+                    } else if (!isHere) {
+                        const c = existing[0];
+                        await cDB.update({ ...c, unread: (c.unread || 0) + 1 });
+                    }
+                } catch (_) { }
+            }
+        };
+
+        const onMsgSent = async (data) => {
+            setSendError('');
+            const me = meRef.current;
+            const contact = contactRef.current;
+            const mDB = msgsRef.current;
+            const cDB = contactsRef.current;
+            if (!data.toUserId || !me) return;
+
+            if (contact?.isNew) {
+                const meId = getId(me);
+                const cId = getConversationId(meId, data.toUserId);
+                if (cDB) {
+                    try {
+                        const ex = await cDB.where((c) => c.userId === data.toUserId);
+                        if (!ex.length) await cDB.add({ userId: data.toUserId, email: contact.email, name: contact.name || contact.email });
+                    } catch (_) { }
+                }
+                if (mDB && pendingRef.current.length) {
+                    for (const pm of pendingRef.current) {
+                        try { await mDB.add({ conversationId: cId, fromUserId: meId, toUserId: data.toUserId, text: pm.text, type: pm.type || 'text', timestamp: pm.timestamp, isMe: true }); } catch (_) { }
+                    }
+                    pendingRef.current = [];
+                }
+                dispatch(setSelectedContact({ ...contact, userId: data.toUserId, isNew: false }));
+            }
+        };
+
+        const onMsgFailed = (d) => {
+            setSendError(d.reason || 'Message failed — user not found');
+            pendingRef.current = [];
+            setTimeout(() => setSendError(''), 5000);
+        };
+
+        socket.on('connect', onConnect);
+        socket.on('disconnect', onDisconnect);
+        socket.on('user-status', onStatus);
+        socket.on('receive-private-message', onPrivateMsg);
+        socket.on('message-sent', onMsgSent);
+        socket.on('message-failed', onMsgFailed);
 
         return () => {
-            socket.off("connect");
-            socket.off("disconnect");
-            socket.off("receiveMessage");
-            socket.off("receive-private-message");
-            socket.off("typing");
+            socket.off('connect', onConnect);
+            socket.off('disconnect', onDisconnect);
+            socket.off('user-status', onStatus);
+            socket.off('receive-private-message', onPrivateMsg);
+            socket.off('message-sent', onMsgSent);
+            socket.off('message-failed', onMsgFailed);
         };
-    }, [activeUser, userName]);
+    }, [activeUser, dispatch]);
 
-    // Auto-scroll to bottom on new messages
-    useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [allMsg, userTyping]);
+    // --- Send ---
+    const handleSend = async (e) => {
+        e.preventDefault();
+        const text = input.trim();
+        if (!text || !selectedContact || !activeUser) return;
 
-    const handleChange = (e) => {
-        setMsg(prev => ({ ...prev, [e.target.name]: e.target.value }));
+        const now = new Date().toISOString();
+        const myId = getId(activeUser);
 
-        if (!typing) {
-            setTyping(true);
-            socket.emit("typing", true);
+        setInput('');
+        setTimeout(() => inputRef.current?.focus(), 0);
+
+        // Optimistic UI
+        setMessages((prev) => [...prev, { id: Date.now(), text, type: 'text', timestamp: now, isMe: true }]);
+
+        // Persist
+        if (convId && messagesStore) {
+            try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text, type: 'text', timestamp: now, isMe: true }); } catch (_) { }
+        } else if (selectedContact.isNew) {
+            pendingRef.current.push({ text, type: 'text', timestamp: now });
         }
 
-        clearTimeout(typingTimer.current);
-        typingTimer.current = setTimeout(() => {
-            setTyping(false);
-            socket.emit("typing", false);
-        }, 1200);
+        // Emit
+        socket.emit('send-message-by-email', {
+            fromUserId: myId,
+            toEmail: selectedContact.email,
+            message: text,
+            type: 'text',
+        });
     };
 
-    const handleFileUpload = (e) => {
+    // --- File / media upload ---
+    const handleFile = async (e) => {
         const file = e.target.files[0];
-        if (!file) return;
+        if (!file || !selectedContact || !activeUser) return;
+        e.target.value = '';
+
+        // Safe limit: base64 encoding inflates size ~33%, so 700KB file → ~930KB payload
+        // Socket.IO default max is 1MB, so 700KB is the safe ceiling
+        const MAX_BYTES = 10 * 1024 * 1024;
+        if (file.size > MAX_BYTES) {
+            setSendError('File too large (max 700 KB). Files are sent live over socket.');
+            setTimeout(() => setSendError(''), 6000);
+            return;
+        }
+
+        const type = file.type.startsWith('image/') ? 'image'
+            : file.type.startsWith('video/') ? 'video'
+                : file.type.startsWith('audio/') ? 'audio'
+                    : 'file';
 
         const reader = new FileReader();
-        reader.onload = (event) => {
-            const type = file.type.startsWith('image/') ? 'image' :
-                file.type.startsWith('video/') ? 'video' :
-                    file.type.startsWith('audio/') ? 'audio' : 'text';
+        reader.onload = async (ev) => {
+            const now = new Date().toISOString();
+            const content = ev.target.result;
+            const myId = getId(activeUser);
+            const fileName = file.name;
 
-            const payload = {
-                senderId: activeUser?._id,
-                roomId: "main",
+            setMessages((prev) => [...prev, { id: Date.now(), text: content, type, timestamp: now, isMe: true, fileName }]);
+
+            if (convId && messagesStore) {
+                try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text: content, type, timestamp: now, isMe: true, fileName }); } catch (_) { }
+            } else if (selectedContact.isNew) {
+                pendingRef.current.push({ text: content, type, timestamp: now, fileName });
+            }
+
+            socket.emit('send-message-by-email', {
+                fromUserId: myId,
+                toEmail: selectedContact.email,
+                message: content,
                 type,
-                content: event.target.result // Base64 for the mockup
-            };
-            socket.emit("sendMessage", payload);
-
-            // Optimistic add
-            setAllMsg(prev => [...prev, { userName, msg: event.target.result, type, id: Date.now() }]);
+                fileName,
+            });
         };
+        reader.onerror = () => setSendError('Failed to read file. Please try again.');
         reader.readAsDataURL(file);
     };
 
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        if (!mes.msg.trim()) return;
-
-        // Backend expects: { senderId, roomId, type, content }
-        const messagePayload = {
-            senderId: activeUser?._id,
-            roomId: "main", // Should probably be dynamic
-            type: "text",
-            content: mes.msg
-        };
-
-        // Emit message to the server
-        socket.emit("sendMessage", messagePayload);
-
-        // Optimistically add your own message to the UI
-        const myId = Date.now();
-        setAllMsg(prev => [...prev, { ...mes, id: myId, type: "text" }]);
-
-        setMsg(prev => ({ ...prev, msg: "" }));
-        inputRef.current?.focus();
-    };
-
-    const isMine = (name) => name === userName;
-
-    const getProfilePic = (user) => {
-        if (!user) return null;
-        if (user.profileImage && user.profileImage.data && user.profileImage.data.data) {
-            const buffer = user.profileImage.data.data;
-            let binary = '';
-            const bytes = new Uint8Array(buffer);
-            const len = bytes.byteLength;
-            for (let i = 0; i < len; i++) {
-                binary += String.fromCharCode(bytes[i]);
-            }
-            return `data:${user.profileImage.contentType};base64,${window.btoa(binary)}`;
+    // --- Helpers ---
+    const initials = (u) => u?.name ? u.name[0].toUpperCase() : u?.email ? u.email[0].toUpperCase() : '?';
+    const displayName = (u) => u?.name || u?.email?.split('@')[0] || 'User';
+    const profilePic = (u) => {
+        if (!u) return null;
+        if (u.profileImage?.data?.data) {
+            let b = ''; const bytes = new Uint8Array(u.profileImage.data.data);
+            for (let i = 0; i < bytes.byteLength; i++) b += String.fromCharCode(bytes[i]);
+            return `data:${u.profileImage.contentType};base64,${window.btoa(b)}`;
         }
-        if (user.profilePic) {
-            if (user.profilePic.startsWith('http')) return user.profilePic;
-            return `http://192.168.0.54:5000/${user.profilePic}`;
-        }
+        if (u.profilePic) return u.profilePic.startsWith('http') ? u.profilePic : `${SOCKET_URL}${u.profilePic}`;
         return null;
     };
 
+    if (!activeUser || !selectedContact) return null;
+
+    const isOnline = contactId && onlineUsers.includes(contactId);
+
     return (
-        <div className="h-screen w-screen flex flex-col bg-[#0a0f1e] text-slate-200 overflow-hidden font-sans">
+        <div className="h-screen w-screen flex flex-col bg-[#07090f] text-slate-200 overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
+
+            {/* Subtle bg */}
+            <div className="fixed inset-0 pointer-events-none">
+                <div style={{ position: 'absolute', top: '-20%', left: '-10%', width: '55%', height: '55%', background: 'rgba(6,182,212,0.06)', borderRadius: '50%', filter: 'blur(140px)' }} />
+                <div style={{ position: 'absolute', bottom: '-20%', right: '-10%', width: '55%', height: '55%', background: 'rgba(99,102,241,0.06)', borderRadius: '50%', filter: 'blur(140px)' }} />
+            </div>
 
             {/* ── HEADER ── */}
-            <div className="flex items-center justify-between px-8 py-5 bg-slate-900/50 backdrop-blur-xl border-b border-white/5 shadow-2xl z-20">
-                <div className="flex items-center gap-4 group">
-                    <div className="w-11 h-11 rounded-[14px] bg-gradient-to-tr from-cyan-400 to-indigo-600 flex items-center justify-center text-white text-xl shadow-lg shadow-cyan-500/20 group-hover:scale-105 transition-transform duration-300 overflow-hidden">
-                        {getProfilePic(activeUser) ? (
-                            <img src={getProfilePic(activeUser)} alt="Me" className="w-full h-full object-cover" />
-                        ) : (
-                            "⚡"
-                        )}
-                    </div>
-                    <div>
-                        <h2 className="text-white font-black text-xl tracking-tight leading-none mb-1">LiveStream Chat</h2>
-                        <div className="flex items-center gap-2">
-                            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                            <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">{connected ? 'Socket Connected' : 'Connecting...'}</p>
+            <div style={{ position: 'relative', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', background: 'rgba(15,20,40,0.85)', backdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+
+                {/* Left: back + contact */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <button
+                        onClick={() => navigate('/home')}
+                        style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, cursor: 'pointer', color: '#94a3b8', display: 'flex', alignItems: 'center' }}
+                        onMouseEnter={e => e.currentTarget.style.color = '#22d3ee'}
+                        onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
+                    >
+                        <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                        </svg>
+                    </button>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ position: 'relative' }}>
+                            <div style={{ width: 44, height: 44, borderRadius: 14, background: 'linear-gradient(135deg,rgba(34,211,238,0.2),rgba(99,102,241,0.2))', border: '1px solid rgba(34,211,238,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: 18, color: '#22d3ee' }}>
+                                {initials(selectedContact)}
+                            </div>
+                            {isOnline && <div style={{ position: 'absolute', bottom: -2, right: -2, width: 12, height: 12, background: '#22c55e', border: '2px solid #07090f', borderRadius: '50%' }} />}
                         </div>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-4">
-                    <div className="text-right hidden sm:block">
-                        <p className="text-[10px] text-cyan-400 font-bold uppercase tracking-widest leading-none mb-1">Active User</p>
-                        <p className="text-white font-bold text-sm tracking-tight">{userName}</p>
-                    </div>
-                </div>
-            </div>
-
-            {/* ── MESSAGE LOG ── */}
-            <div className="flex-1 overflow-y-auto px-6 py-8 flex flex-col gap-4 scroll-smooth custom-scrollbar">
-
-                {allMsg.length === 0 && (
-                    <div className="flex-1 flex flex-col items-center justify-center text-slate-600 opacity-20 select-none animate-pulse">
-                        <div className="text-8xl mb-4">🚀</div>
-                        <p className="text-xs font-black uppercase tracking-[0.4em]">Initialize Conversation</p>
-                    </div>
-                )}
-
-                {allMsg.map((ele, ind) => {
-                    const mine = isMine(ele.userName);
-                    const isNew = animIds.has(ele.id);
-
-                    return (
-                        <div key={ele.id || ind} className={`flex w-full ${mine ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`flex flex-col gap-1.5 max-w-[75%] ${mine ? 'items-end' : 'items-start'}`}>
-                                {!mine && (
-                                    <span className="text-[10px] text-slate-500 pl-3 font-black uppercase tracking-widest">{ele.userName}</span>
-                                )}
-                                <div className={`px-5 py-3.5 rounded-[22px] text-sm leading-relaxed font-semibold break-words transition-all duration-300
-                                    ${mine ? 'bg-gradient-to-br from-indigo-500 to-violet-700 text-white rounded-br-sm shadow-xl shadow-indigo-500/20' : 'bg-white/5 text-slate-100 border border-white/5 rounded-bl-sm backdrop-blur-md'}
-                                    ${isNew ? 'animate-msgPop' : ''}
-                                `}>
-                                    {ele.type === "image" ? (
-                                        <img src={ele.msg} alt="shared" className="max-w-[200px] rounded-lg" />
-                                    ) : ele.type === "video" ? (
-                                        <video src={ele.msg} controls className="max-w-[200px] rounded-lg" />
-                                    ) : ele.type === "audio" ? (
-                                        <audio src={ele.msg} controls className="max-w-[200px]" />
-                                    ) : (
-                                        ele.msg
-                                    )}
-                                </div>
+                        <div>
+                            <p style={{ margin: 0, fontWeight: 900, fontSize: 15, color: '#f1f5f9', letterSpacing: '-0.3px' }}>{displayName(selectedContact)}</p>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
+                                <span style={{ width: 6, height: 6, borderRadius: '50%', background: selectedContact.isNew ? '#facc15' : isOnline ? '#22c55e' : '#475569', display: 'inline-block', boxShadow: isOnline ? '0 0 6px #22c55e' : 'none' }} />
+                                <span style={{ fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#64748b' }}>
+                                    {selectedContact.isNew ? 'New conversation' : isOnline ? 'Online' : 'Offline — queued delivery'}
+                                </span>
                             </div>
                         </div>
-                    );
-                })}
+                    </div>
+                </div>
 
-                {userTyping && (
-                    <div className="flex justify-start animate-fade">
-                        <div className="flex items-center gap-2 bg-white/5 border border-white/5 px-4 py-4 rounded-[18px] rounded-bl-sm">
-                            {[0, 1, 2].map(i => (
-                                <span key={i} className="w-1.5 h-1.5 rounded-full bg-cyan-400 opacity-40"
-                                    style={{ animation: `typingDot 1s ease-in-out ${i * 0.15}s infinite` }} />
-                            ))}
+                {/* Right: me + status */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, padding: '6px 12px' }}>
+                        <div style={{ width: 28, height: 28, borderRadius: 10, background: 'linear-gradient(135deg,#22d3ee,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900, color: '#fff', overflow: 'hidden', flexShrink: 0 }}>
+                            {profilePic(activeUser) ? <img src={profilePic(activeUser)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials(activeUser)}
+                        </div>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#f1f5f9', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(activeUser)}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 10, padding: '5px 10px' }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: connected ? '#22c55e' : '#ef4444', display: 'inline-block', animation: connected ? 'pls 2s ease-in-out infinite' : 'none' }} />
+                        <span style={{ fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#64748b' }}>{connected ? 'Live' : 'Reconnecting'}</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Error */}
+            {sendError && (
+                <div style={{ position: 'relative', zIndex: 10, margin: '10px 20px 0', padding: '10px 16px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 14, color: '#f87171', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                    <span>⚠ {sendError}</span>
+                    <button onClick={() => setSendError('')} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 16 }}>×</button>
+                </div>
+            )}
+
+            {/* ── MESSAGES ── */}
+            <div style={{ position: 'relative', zIndex: 10, flex: 1, overflowY: 'auto', padding: '20px 20px 10px', display: 'flex', flexDirection: 'column', gap: 10 }} className="custom-scrollbar">
+
+                {messages.length === 0 && (
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 40, padding: '48px 40px', maxWidth: 320 }}>
+                            <div style={{ fontSize: 56, marginBottom: 16 }}>💬</div>
+                            <h2 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 900, color: '#f1f5f9' }}>Start the conversation</h2>
+                            <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
+                                {selectedContact.isNew ? `Connect with ${displayName(selectedContact)}` : `Chat with ${displayName(selectedContact)}`}
+                            </p>
                         </div>
                     </div>
                 )}
-                <div ref={bottomRef} className="h-2" />
+
+                {messages.map((msg, idx) => (
+                    <div key={msg.id || idx} style={{ display: 'flex', alignItems: 'flex-end', gap: 8, justifyContent: msg.isMe ? 'flex-end' : 'flex-start' }}>
+
+                        {/* Their avatar (left) */}
+                        {!msg.isMe && (
+                            <div style={{ width: 32, height: 32, borderRadius: 10, background: '#1e293b', border: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 900, color: '#94a3b8', flexShrink: 0 }}>
+                                {initials(selectedContact)}
+                            </div>
+                        )}
+
+                        {/* Bubble */}
+                        <div style={{
+                            maxWidth: '68%', padding: '12px 14px', borderRadius: msg.isMe ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
+                            background: msg.isMe ? 'linear-gradient(135deg,#6366f1,#7c3aed)' : 'rgba(255,255,255,0.05)',
+                            border: msg.isMe ? 'none' : '1px solid rgba(255,255,255,0.08)',
+                            boxShadow: msg.isMe ? '0 8px 24px rgba(99,102,241,0.25)' : 'none',
+                            color: '#f1f5f9'
+                        }}>
+                            {/* ── Image ── */}
+                            {msg.type === 'image' && (
+                                <img src={msg.text} alt={msg.fileName || 'image'}
+                                    style={{ maxWidth: 260, maxHeight: 200, borderRadius: 12, display: 'block', marginBottom: 4, objectFit: 'cover', cursor: 'pointer' }}
+                                    onClick={() => window.open(msg.text, '_blank')}
+                                />
+                            )}
+
+                            {/* ── Video ── */}
+                            {msg.type === 'video' && (
+                                <video src={msg.text} controls
+                                    style={{ maxWidth: 260, borderRadius: 12, display: 'block', marginBottom: 4 }}
+                                />
+                            )}
+
+                            {/* ── Audio / Music player ── */}
+                            {msg.type === 'audio' && (
+                                <div style={{ minWidth: 220 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                                        <div style={{ width: 32, height: 32, borderRadius: 10, background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>🎵</div>
+                                        <div style={{ minWidth: 0 }}>
+                                            <p style={{ margin: 0, fontSize: 11, fontWeight: 700, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {msg.fileName || 'Audio'}
+                                            </p>
+                                            <p style={{ margin: 0, fontSize: 9, opacity: 0.5, fontWeight: 600 }}>Audio message</p>
+                                        </div>
+                                    </div>
+                                    <audio src={msg.text} controls
+                                        style={{ width: '100%', height: 32, borderRadius: 8 }}
+                                    />
+                                </div>
+                            )}
+
+                            {/* ── Generic file ── */}
+                            {msg.type === 'file' && (
+                                <a href={msg.text} download={msg.fileName || 'file'}
+                                    style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', padding: '4px 0' }}
+                                >
+                                    <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>📎</div>
+                                    <div>
+                                        <p style={{ margin: 0, fontSize: 12, fontWeight: 700 }}>{msg.fileName || 'File'}</p>
+                                        <p style={{ margin: 0, fontSize: 9, opacity: 0.5 }}>Tap to download</p>
+                                    </div>
+                                </a>
+                            )}
+
+                            {/* ── Text ── */}
+                            {msg.type === 'text' && (
+                                <p style={{ margin: 0, fontSize: 14, fontWeight: 500, lineHeight: 1.5, wordBreak: 'break-word' }}>{msg.text}</p>
+                            )}
+
+                            <p style={{ margin: '6px 0 0', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.4, textAlign: msg.isMe ? 'right' : 'left' }}>
+                                {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                            </p>
+                        </div>
+
+                        {/* My avatar (right) */}
+                        {msg.isMe && (
+                            <div style={{ width: 32, height: 32, borderRadius: 10, background: 'rgba(34,211,238,0.1)', border: '1px solid rgba(34,211,238,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 900, color: '#22d3ee', flexShrink: 0, overflow: 'hidden' }}>
+                                {profilePic(activeUser) ? <img src={profilePic(activeUser)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : initials(activeUser)}
+                            </div>
+                        )}
+                    </div>
+                ))}
+
+                <div ref={bottomRef} style={{ height: 4 }} />
             </div>
 
-            {/* ── INPUT SYSTEM ── */}
-            <div className="px-6 py-6 bg-slate-900/50 backdrop-blur-xl border-t border-white/5 flex-shrink-0 z-20">
-                <form className="max-w-4xl mx-auto flex items-center gap-4" onSubmit={handleSubmit}>
-                    <label className="flex items-center justify-center w-14 h-14 bg-white/5 border border-white/10 rounded-[20px] cursor-pointer hover:bg-white/10 transition-colors">
-                        <input type="file" className="hidden" onChange={handleFileUpload} accept="image/*,video/*,audio/*" />
-                        <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
-                    </label>
-                    <div className="flex-1 relative group">
-                        <div className="absolute inset-0 bg-cyan-500/10 blur-xl opacity-0 group-focus-within:opacity-100 transition-opacity rounded-3xl" />
-                        <input
-                            ref={inputRef}
-                            type="text"
-                            name="msg"
-                            value={mes.msg}
-                            onChange={handleChange}
-                            placeholder={`Message the community...`}
-                            autoComplete="off"
-                            className="w-full relative bg-white/5 border border-white/10 rounded-[22px] px-8 py-5 text-sm text-white placeholder-slate-600 outline-none transition-all focus:border-cyan-500/40 focus:bg-white/[0.08]"
-                        />
-                    </div>
+            {/* ── INPUT ── */}
+            <div style={{ position: 'relative', zIndex: 10, padding: '12px 20px 20px', flexShrink: 0 }}>
+                <form onSubmit={handleSend} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(15,20,40,0.9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 32, padding: '6px 6px 6px 14px', backdropFilter: 'blur(20px)' }}>
 
-                    <button type="submit" disabled={!mes.msg.trim()} className="
-                        h-14 w-14 flex items-center justify-center rounded-[20px] transition-all duration-300
-                        bg-gradient-to-tr from-cyan-400 to-indigo-600 text-white shadow-xl shadow-cyan-600/20
-                        hover:scale-110 active:scale-95 disabled:opacity-30 disabled:grayscale disabled:hover:scale-100
-                    ">
-                        <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    {/* Attach */}
+                    <label style={{ cursor: 'pointer', color: '#475569', display: 'flex', alignItems: 'center', padding: '8px', borderRadius: '50%', flexShrink: 0 }}
+                        onMouseEnter={e => e.currentTarget.style.color = '#22d3ee'}
+                        onMouseLeave={e => e.currentTarget.style.color = '#475569'}
+                    >
+                        {/* FIX 1: accept now includes audio and document types */}
+                        <input type="file" style={{ display: 'none' }} onChange={handleFile} accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" />
+                        <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                        </svg>
+                    </label>
+
+                    {/* Text field */}
+                    <input
+                        ref={inputRef}
+                        type="text"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        placeholder={`Message ${displayName(selectedContact)}…`}
+                        autoComplete="off"
+                        style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#f1f5f9', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', padding: '12px 0' }}
+                    />
+
+                    {/* Send */}
+                    <button
+                        type="submit"
+                        disabled={!input.trim()}
+                        style={{
+                            width: 46, height: 46, borderRadius: '50%', border: 'none', cursor: input.trim() ? 'pointer' : 'default',
+                            background: input.trim() ? 'linear-gradient(135deg,#22d3ee,#6366f1)' : 'rgba(255,255,255,0.05)',
+                            color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            flexShrink: 0, transition: 'transform 0.15s', opacity: input.trim() ? 1 : 0.3
+                        }}
+                        onMouseEnter={e => { if (input.trim()) e.currentTarget.style.transform = 'scale(1.08)'; }}
+                        onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+                    >
+                        <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                         </svg>
                     </button>
@@ -283,19 +492,10 @@ const Chat = () => {
             </div>
 
             <style>{`
-                @keyframes msgPop {
-                    from { opacity: 0; transform: scale(0.9) translateY(10px); }
-                    to { opacity: 1; transform: scale(1) translateY(0); }
-                }
-                @keyframes typingDot {
-                    0%, 100% { transform: translateY(0); opacity: 0.4; }
-                    50% { transform: translateY(-3px); opacity: 1; }
-                }
-                @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-                .animate-msgPop { animation: msgPop 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-                .animate-fade { animation: fade 0.3s ease-out; }
-                .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-                .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.05); border-radius: 99px; }
+                @keyframes pls { 0%,100%{opacity:1} 50%{opacity:0.4} }
+                .custom-scrollbar::-webkit-scrollbar{width:4px}
+                .custom-scrollbar::-webkit-scrollbar-track{background:transparent}
+                .custom-scrollbar::-webkit-scrollbar-thumb{background:rgba(6,182,212,0.15);border-radius:99px}
             `}</style>
         </div>
     );
