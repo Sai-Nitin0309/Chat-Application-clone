@@ -4,6 +4,7 @@ const initialState = {
   messages: [],
   activeUser: null,
   users: [],
+  selectedContact: null,
   loading: false,
   error: null
 }
@@ -43,6 +44,10 @@ export const chatSlice = createSlice({
       state.users = []
     },
 
+    setSelectedContact: (state, action) => {
+      state.selectedContact = action.payload
+    },
+
     clearChat: (state) => {
       state.messages = []
     }
@@ -56,6 +61,7 @@ export const {
   setMessages,
   addMessage,
   setActiveUser,
+  setSelectedContact,
   addUser,
   removeAllUsers,
   clearChat

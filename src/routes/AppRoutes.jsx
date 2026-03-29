@@ -16,9 +16,6 @@ function AppRoutes() {
       <Route path="/otp" element={<OTP />} />
       <Route path="/home" element={<HomePage />} />
       <Route path="/chat" element={<Chat />} />
-
-
-      {/* <Route path="/chat" element={<Chat />} /> */}
     </Routes>
   )
 }

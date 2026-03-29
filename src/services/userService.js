@@ -2,7 +2,7 @@
 import axios from "axios";
 
 // const BASE_URL = "http://localhost:5000";
-const BASE_URL = "https://mes-ioa3.onrender.com";
+export const BASE_URL = "https://mes-ioa3.onrender.com";
 
 export const registerUserService = async (user) => {
 
