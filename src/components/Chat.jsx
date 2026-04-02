@@ -40,6 +40,24 @@ const Chat = () => {
     const [connected, setConnected] = useState(socket.connected);
     const [onlineUsers, setOnlineUsers] = useState([]);
     const [sendError, setSendError] = useState('');
+    const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+    const [menuOpen, setMenuOpen] = useState(false);
+
+    // Close emoji picker and menu on outside click
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            const inputContainer = e.target.closest('div');
+            if (!e.target.closest('button') && !e.target.closest('input[type="text"]')) {
+                if (emojiPickerOpen) setEmojiPickerOpen(false);
+                if (menuOpen) setMenuOpen(false);
+            }
+        };
+        
+        if (emojiPickerOpen || menuOpen) {
+            document.addEventListener('click', handleClickOutside);
+            return () => document.removeEventListener('click', handleClickOutside);
+        }
+    }, [emojiPickerOpen, menuOpen]);
 
     // --- Guard: redirect if no user/contact ---
     useEffect(() => {
@@ -83,6 +101,8 @@ const Chat = () => {
         const onStatus = (d) => setOnlineUsers(d.onlineUsers || []);
 
         const onPrivateMsg = async (data) => {
+            console.log(data);
+
             const me = meRef.current;
             const contact = contactRef.current;
             const mDB = msgsRef.current;
@@ -101,13 +121,17 @@ const Chat = () => {
                 ? new Date(data.createdAt).toISOString()
                 : new Date().toISOString();
 
+            console.log(isHere, contact);
+
             // --- Always update UI immediately (no DB dependency) ---
-            if (isHere) {
-                setMessages((prev) => [
-                    ...prev,
-                    { id: Date.now() + Math.random(), text: data.message, type: data.type || 'text', timestamp, fileName: data.fileName || null, isMe: false },
-                ]);
-            }
+
+            setMessages((prev) => [
+                ...prev,
+                { id: Date.now() + Math.random(), text: data.message, type: data.type || 'text', timestamp, fileName: data.fileName || null, isMe: false },
+            ]);
+
+            console.log(messages);
+
 
             // --- Persist to IndexedDB in background ---
             if (mDB) {
@@ -131,6 +155,8 @@ const Chat = () => {
         };
 
         const onMsgSent = async (data) => {
+            console.log(data);
+
             setSendError('');
             const me = meRef.current;
             const contact = contactRef.current;
@@ -211,39 +237,66 @@ const Chat = () => {
         });
     };
 
-    // --- File / media upload ---
     const handleFile = async (e) => {
         const file = e.target.files[0];
         if (!file || !selectedContact || !activeUser) return;
+
         e.target.value = '';
 
-        // Safe limit: base64 encoding inflates size ~33%, so 700KB file → ~930KB payload
-        // Socket.IO default max is 1MB, so 700KB is the safe ceiling
-        const MAX_BYTES = 10 * 1024 * 1024;
+        const MAX_BYTES = 50 * 1024 * 1024; // 50MB
+
         if (file.size > MAX_BYTES) {
-            setSendError('File too large (max 700 KB). Files are sent live over socket.');
-            setTimeout(() => setSendError(''), 6000);
+            setSendError('File too large (max 50 MB)');
+            setTimeout(() => setSendError(''), 600000);
             return;
         }
 
-        const type = file.type.startsWith('image/') ? 'image'
-            : file.type.startsWith('video/') ? 'video'
-                : file.type.startsWith('audio/') ? 'audio'
-                    : 'file';
+        console.log("File size within limits");
+        let type = file.type ? file.type.split('/')[0] : 'file';
+        if (!['image', 'video', 'audio'].includes(type)) {
+            type = 'file';
+        }
 
+        const now = new Date().toISOString();
+        const myId = getId(activeUser);
+
+        // Optimistic UI
+        const messageId = Date.now();
+        setMessages((prev) => [
+            ...prev,
+            {
+                id: messageId,
+                text: 'Sending file...',
+                type: 'text',
+                timestamp: now,
+                isMe: true,
+                fileName: file.name
+            }
+        ]);
+
+        // Small file: send as DataURL
         const reader = new FileReader();
+
         reader.onload = async (ev) => {
-            const now = new Date().toISOString();
             const content = ev.target.result;
+            const now = new Date().toISOString();
             const myId = getId(activeUser);
-            const fileName = file.name;
 
-            setMessages((prev) => [...prev, { id: Date.now(), text: content, type, timestamp: now, isMe: true, fileName }]);
+            // Update optimistic UI
+            setMessages((prev) => prev.map(msg =>
+                msg.id === messageId ? {
+                    ...msg,
+                    text: content,
+                    type,
+                    fileName: file.name
+                } : msg
+            ));
 
+            // Persist
             if (convId && messagesStore) {
-                try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text: content, type, timestamp: now, isMe: true, fileName }); } catch (_) { }
+                try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text: content, type, timestamp: now, isMe: true, fileName: file.name }); } catch (_) { }
             } else if (selectedContact.isNew) {
-                pendingRef.current.push({ text: content, type, timestamp: now, fileName });
+                pendingRef.current.push({ text: content, type, timestamp: now, fileName: file.name });
             }
 
             socket.emit('send-message-by-email', {
@@ -251,10 +304,14 @@ const Chat = () => {
                 toEmail: selectedContact.email,
                 message: content,
                 type,
-                fileName,
+                fileName: file.name
             });
         };
-        reader.onerror = () => setSendError('Failed to read file. Please try again.');
+
+        reader.onerror = () => {
+            setSendError('Failed to read file');
+        };
+
         reader.readAsDataURL(file);
     };
 
@@ -270,6 +327,32 @@ const Chat = () => {
         }
         if (u.profilePic) return u.profilePic.startsWith('http') ? u.profilePic : `${SOCKET_URL}${u.profilePic}`;
         return null;
+    };
+
+    // --- Emoji picker ---
+    const emojis = ['😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '☺️', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤮', '🤧', '🏨', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐', '😕', '😟', '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾', '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '👋', '⭐', '✨', '⚡', '🔥', '💥', '👏', '🎉', '🎊', '🎈', '🎁', '🍕', '🍔', '🍟', '🌭', '🍗', '🍖', '🍤', '🍣', '🍜', '🍝', '🍛', '🍱', '🥟', '🍚', '🍙', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🍰', '🎂', '🧁', '🍮', '🍭', '🍬', '🍫', '🍩', '🍪', '☕', '🍵', '🍶', '🍾', '🍷', '🍸', '🍹', '🍺', '🍻', '🥂', '🎵', '🎶', '✈️', '🚀', '❄️', '🌸', '🌺', '🌻', '🌷', '🌹'];
+
+    // --- Clear chat handler ---
+    const handleClearChat = async () => {
+        if (!window.confirm('Are you sure you want to clear this chat? This action cannot be undone.')) return;
+        
+        try {
+            // Clear UI immediately for instant feedback
+            setMessages([]);
+            setMenuOpen(false);
+            
+            // Delete from IndexedDB in background
+            if (convId && messagesStore) {
+                const msgsToDelete = await messagesStore.where((m) => m.conversationId === convId);
+                for (const msg of msgsToDelete) {
+                    await messagesStore.delete(msg.id);
+                }
+            }
+        } catch (err) {
+            console.error('Error clearing chat:', err);
+            setSendError('Failed to clear chat');
+            setTimeout(() => setSendError(''), 5000);
+        }
     };
 
     if (!activeUser || !selectedContact) return null;
@@ -331,6 +414,37 @@ const Chat = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 10, padding: '5px 10px' }}>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: connected ? '#22c55e' : '#ef4444', display: 'inline-block', animation: connected ? 'pls 2s ease-in-out infinite' : 'none' }} />
                         <span style={{ fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#64748b' }}>{connected ? 'Live' : 'Reconnecting'}</span>
+                    </div>
+                    
+                    {/* Three-dot menu */}
+                    <div style={{ position: 'relative' }}>
+                        <button
+                            onClick={() => setMenuOpen(!menuOpen)}
+                            className="menu-btn"
+                            style={{ padding: '8px 10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, cursor: 'pointer', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+                                <circle cx="12" cy="5" r="2" />
+                                <circle cx="12" cy="12" r="2" />
+                                <circle cx="12" cy="19" r="2" />
+                            </svg>
+                        </button>
+                        
+                        {/* Dropdown menu */}
+                        {menuOpen && (
+                            <div className="menu-dropdown" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 8, background: 'rgba(15,20,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 16, boxShadow: '0 10px 40px rgba(0,0,0,0.4)', minWidth: 180, zIndex: 1000, backdropFilter: 'blur(20px)' }}>
+                                <button
+                                    onClick={handleClearChat}
+                                    className="menu-item"
+                                    style={{ width: '100%', padding: '12px 16px', background: 'none', border: 'none', textAlign: 'left', color: '#f87171', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, borderRadius: '16px 16px 0 0', transition: 'background 0.15s ease' }}
+                                >
+                                    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                    Clear Chat
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -446,19 +560,77 @@ const Chat = () => {
 
             {/* ── INPUT ── */}
             <div style={{ position: 'relative', zIndex: 10, padding: '12px 20px 20px', flexShrink: 0 }}>
+                {/* Emoji Picker - shown above input when opened */}
+                {emojiPickerOpen && (
+                    <div style={{ 
+                        background: 'rgba(15,20,40,0.95)', 
+                        border: '1px solid rgba(255,255,255,0.1)', 
+                        borderRadius: '16px 16px 0 0',
+                        padding: '12px', 
+                        marginBottom: '12px',
+                        maxHeight: '200px',
+                        overflowY: 'auto',
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(8, 1fr)',
+                        gap: '8px',
+                        backdropFilter: 'blur(20px)'
+                    }}>
+                        {emojis.map((emoji, idx) => (
+                            <button
+                                key={idx}
+                                onClick={() => {
+                                    setInput(input + emoji);
+                                    inputRef.current?.focus();
+                                }}
+                                style={{
+                                    background: 'rgba(255,255,255,0.05)',
+                                    border: '1px solid rgba(255,255,255,0.1)',
+                                    borderRadius: '8px',
+                                    padding: '8px',
+                                    fontSize: '24px',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    transition: 'all 0.2s',
+                                    flexShrink: 0
+                                }}
+                                onMouseEnter={e => {
+                                    e.currentTarget.style.background = 'rgba(34,211,238,0.2)';
+                                    e.currentTarget.style.borderColor = 'rgba(34,211,238,0.3)';
+                                    e.currentTarget.style.transform = 'scale(1.2)';
+                                }}
+                                onMouseLeave={e => {
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                                    e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
+                                    e.currentTarget.style.transform = 'scale(1)';
+                                }}
+                            >
+                                {emoji}
+                            </button>
+                        ))}
+                    </div>
+                )}
                 <form onSubmit={handleSend} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(15,20,40,0.9)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 32, padding: '6px 6px 6px 14px', backdropFilter: 'blur(20px)' }}>
 
                     {/* Attach */}
-                    <label style={{ cursor: 'pointer', color: '#475569', display: 'flex', alignItems: 'center', padding: '8px', borderRadius: '50%', flexShrink: 0 }}
-                        onMouseEnter={e => e.currentTarget.style.color = '#22d3ee'}
-                        onMouseLeave={e => e.currentTarget.style.color = '#475569'}
-                    >
+                    <label className="attach-btn" style={{ cursor: 'pointer', color: '#475569', display: 'flex', alignItems: 'center', padding: '8px', borderRadius: '50%', flexShrink: 0 }}>
                         {/* FIX 1: accept now includes audio and document types */}
                         <input type="file" style={{ display: 'none' }} onChange={handleFile} accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" />
                         <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                         </svg>
                     </label>
+
+                    {/* Emoji button */}
+                    <button
+                        type="button"
+                        onClick={() => setEmojiPickerOpen(!emojiPickerOpen)}
+                        style={{ cursor: 'pointer', color: '#475569', display: 'flex', alignItems: 'center', padding: '8px', borderRadius: '50%', flexShrink: 0, background: 'none', border: 'none', fontSize: '20px' }}
+                        title="Emoji picker"
+                    >
+                        😊
+                    </button>
 
                     {/* Text field */}
                     <input
@@ -496,6 +668,38 @@ const Chat = () => {
                 .custom-scrollbar::-webkit-scrollbar{width:4px}
                 .custom-scrollbar::-webkit-scrollbar-track{background:transparent}
                 .custom-scrollbar::-webkit-scrollbar-thumb{background:rgba(6,182,212,0.15);border-radius:99px}
+                
+                /* Attachment button styles */
+                .attach-btn {
+                    transition: color 0.1s ease;
+                }
+                .attach-btn:hover {
+                    color: #22d3ee !important;
+                }
+                
+                /* Menu button styles */
+                .menu-btn {
+                    transition: color 0.1s ease !important;
+                }
+                .menu-btn:hover {
+                    color: #22d3ee !important;
+                }
+                
+                /* Menu item styles */
+                .menu-item {
+                    transition: background 0.1s ease !important;
+                }
+                .menu-item:hover {
+                    background: rgba(239,68,68,0.1) !important;
+                }
+                
+                /* Emoji button styles */
+                button[title="Emoji picker"] {
+                    transition: color 0.1s ease;
+                }
+                button[title="Emoji picker"]:hover {
+                    color: #22d3ee !important;
+                }
             `}</style>
         </div>
     );
