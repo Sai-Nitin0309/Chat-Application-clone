@@ -3,7 +3,7 @@ import Login from "../components/Login"
 import Register from "../components/Register"
 import OTP from "../components/Otp"
 import HomePage from "../components/HomePage";
-import Chat from "../components/Chat";
+import Chat from "../components/chat/Chat";
 
 
 // import Chat from "../Chat"   // future
