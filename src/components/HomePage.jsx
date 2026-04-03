@@ -286,7 +286,11 @@ export default function HomePage() {
     };
 
     const handleMusicAction = (action, data = {}) => socket.emit(`${action}-song`, { roomId: 'main', ...data });
-    const handleLogout = () => { dispatch(setActiveUser(null)); navigate('/'); };
+    const handleLogout = () => {
+        localStorage.removeItem('user');
+        dispatch(setActiveUser(null));
+        navigate('/');
+    };
 
     const getInitials = (u) => u?.name ? u.name[0].toUpperCase() : u?.email ? u.email[0].toUpperCase() : '?';
     const getDisplayName = (u) => u?.name || u?.email?.split('@')[0] || 'User';

@@ -52,7 +52,7 @@ const Chat = () => {
                 if (menuOpen) setMenuOpen(false);
             }
         };
-        
+
         if (emojiPickerOpen || menuOpen) {
             document.addEventListener('click', handleClickOutside);
             return () => document.removeEventListener('click', handleClickOutside);
@@ -335,12 +335,12 @@ const Chat = () => {
     // --- Clear chat handler ---
     const handleClearChat = async () => {
         if (!window.confirm('Are you sure you want to clear this chat? This action cannot be undone.')) return;
-        
+
         try {
             // Clear UI immediately for instant feedback
             setMessages([]);
             setMenuOpen(false);
-            
+
             // Delete from IndexedDB in background
             if (convId && messagesStore) {
                 const msgsToDelete = await messagesStore.where((m) => m.conversationId === convId);
@@ -415,7 +415,7 @@ const Chat = () => {
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: connected ? '#22c55e' : '#ef4444', display: 'inline-block', animation: connected ? 'pls 2s ease-in-out infinite' : 'none' }} />
                         <span style={{ fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#64748b' }}>{connected ? 'Live' : 'Reconnecting'}</span>
                     </div>
-                    
+
                     {/* Three-dot menu */}
                     <div style={{ position: 'relative' }}>
                         <button
@@ -429,7 +429,7 @@ const Chat = () => {
                                 <circle cx="12" cy="19" r="2" />
                             </svg>
                         </button>
-                        
+
                         {/* Dropdown menu */}
                         {menuOpen && (
                             <div className="menu-dropdown" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 8, background: 'rgba(15,20,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 16, boxShadow: '0 10px 40px rgba(0,0,0,0.4)', minWidth: 180, zIndex: 1000, backdropFilter: 'blur(20px)' }}>
@@ -562,11 +562,11 @@ const Chat = () => {
             <div style={{ position: 'relative', zIndex: 10, padding: '12px 20px 20px', flexShrink: 0 }}>
                 {/* Emoji Picker - shown above input when opened */}
                 {emojiPickerOpen && (
-                    <div style={{ 
-                        background: 'rgba(15,20,40,0.95)', 
-                        border: '1px solid rgba(255,255,255,0.1)', 
+                    <div style={{
+                        background: 'rgba(15,20,40,0.95)',
+                        border: '1px solid rgba(255,255,255,0.1)',
                         borderRadius: '16px 16px 0 0',
-                        padding: '12px', 
+                        padding: '12px',
                         marginBottom: '12px',
                         maxHeight: '200px',
                         overflowY: 'auto',

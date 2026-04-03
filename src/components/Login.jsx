@@ -40,11 +40,28 @@ export default function LoginPage() {
       });
 
       if (response) {
-        // Update user in Redux
-        dispatch(setActiveUser(response.user || response));
+        const userData = response.user || response;
+        
+        // 1. Update full user object in Redux state (in-memory)
+        dispatch(setActiveUser(userData));
 
-        // OPTIONAL: Save to localStorage so you stay logged in after refresh
-        localStorage.setItem('user', JSON.stringify(response.user || response));
+        // 2. Prepare a lean version for localStorage to avoid QuotaExceededError
+        const leanUser = {
+          _id: userData._id || userData.id,
+          name: userData.name,
+          email: userData.email,
+          token: userData.token,
+          // Only include profilePic if it's a URL, not a large base64/binary string
+          profilePic: userData.profilePic
+        };
+
+        // 3. Persist session to localStorage
+        try {
+          localStorage.setItem('user', JSON.stringify(leanUser));
+        } catch (storageError) {
+          console.warn("Storage warning: Could not save user session locally.", storageError);
+          // Still consider the login successful!
+        }
 
         alert("Login Successful! Redirecting...");
         navigate('/home');
@@ -52,8 +69,16 @@ export default function LoginPage() {
     } catch (error) {
       console.error("Login component error:", error);
       
-      // Pull specific error message from server if available
-      const serverMessage = error.response?.data?.message || "Invalid email or password. Please try again.";
+      let serverMessage = "An error occurred during login. Please try again.";
+      
+      if (error.response) {
+        serverMessage = error.response.data?.message || `Server Login Failed: ${error.response.status}`;
+      } else if (error.name === 'QuotaExceededError' || error.message?.includes("quota")) {
+        serverMessage = "Browser storage is full! Please clear your cache or local storage.";
+      } else {
+        serverMessage = error.message || "Invalid email or password. Please try again.";
+      }
+      
       alert(serverMessage);
     }
   };
