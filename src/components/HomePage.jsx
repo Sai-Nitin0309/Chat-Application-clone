@@ -40,6 +40,7 @@ export default function HomePage() {
     const [sendError, setSendError] = useState('');
     const [notifications, setNotifications] = useState([]); // toast notifications
     const [musicState, setMusicState] = useState({ songId: null, isPlaying: false, currentTime: 0 });
+    const [contextMenu, setContextMenu] = useState(null); // { x, y, contact }
 
     const audioRef = useRef(null);
     const bottomRef = useRef(null);
@@ -292,6 +293,44 @@ export default function HomePage() {
         navigate('/');
     };
 
+    // ── CONTEXT MENU (right-click delete) ──
+    const handleContextMenu = (e, contact) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu({ x: e.clientX, y: e.clientY, contact });
+    };
+
+    const handleDeleteContact = async () => {
+        if (!contextMenu?.contact) return;
+        const contact = contextMenu.contact;
+        setContextMenu(null);
+        if (!window.confirm(`Delete chat with ${contact.name || contact.email}? This will remove all messages.`)) return;
+
+        try {
+            // Delete all messages for this conversation
+            if (messagesStore && activeUser?._id && contact.userId) {
+                const convId = getConversationId(activeUser._id, contact.userId);
+                const msgs = await messagesStore.where(m => m.conversationId === convId);
+                for (const msg of msgs) {
+                    try { await messagesStore.delete(msg.id); } catch (_) { }
+                }
+            }
+            // Delete the contact
+            if (contacts && contact.id) {
+                await contacts.delete(contact.id);
+            }
+            // Clear selected chat if it was this contact
+            if (selectedChat?.email === contact.email) {
+                setSelectedChat(null);
+                setChatMessages([]);
+            }
+        } catch (err) {
+            console.error('Error deleting contact:', err);
+        }
+    };
+
+    const closeContextMenu = () => setContextMenu(null);
+
     const getInitials = (u) => u?.name ? u.name[0].toUpperCase() : u?.email ? u.email[0].toUpperCase() : '?';
     const getDisplayName = (u) => u?.name || u?.email?.split('@')[0] || 'User';
     const getProfilePic = (user) => {
@@ -422,6 +461,7 @@ export default function HomePage() {
                             <div
                                 key={contact.id || idx}
                                 onClick={() => handleSelectContact(contact)}
+                                onContextMenu={(e) => handleContextMenu(e, contact)}
                                 className={`flex items-center gap-4 p-5 rounded-[24px] transition-all duration-500 cursor-pointer group animate-slideIn relative border
                                     ${selectedChat?.email === contact.email
                                         ? 'bg-cyan-500/15 border-cyan-500/30 shadow-[0_0_20px_rgba(6,182,212,0.1)] active-chat-indicator'
@@ -627,6 +667,37 @@ export default function HomePage() {
                     </div>
                 )}
             </main>
+
+            {/* ── CONTEXT MENU ── */}
+            {contextMenu && (
+                <>
+                    {/* Backdrop to close menu */}
+                    <div
+                        className="fixed inset-0 z-[150]"
+                        onClick={closeContextMenu}
+                        onContextMenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+                    />
+                    <div
+                        className="fixed z-[160] bg-slate-900/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden animate-fadeInFast"
+                        style={{ top: contextMenu.y, left: contextMenu.x, minWidth: '180px' }}
+                    >
+                        <div className="px-4 py-3 border-b border-white/5">
+                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">
+                                {contextMenu.contact?.name || contextMenu.contact?.email}
+                            </p>
+                        </div>
+                        <button
+                            onClick={handleDeleteContact}
+                            className="w-full flex items-center gap-3 px-4 py-3 text-red-400 hover:bg-red-500/10 transition-colors text-sm font-bold"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            Delete Chat
+                        </button>
+                    </div>
+                </>
+            )}
 
             {/* ── PROFILE MODAL ── */}
             {showProfile && (

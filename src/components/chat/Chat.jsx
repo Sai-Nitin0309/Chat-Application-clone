@@ -216,22 +216,38 @@ const Chat = () => {
 
         const now = new Date().toISOString();
         const myId = getId(activeUser);
+        const MIN_LOADER_MS = 6000; // show loader for at least 6 seconds
 
         const messageId = Date.now();
-        setMessages((prev) => [...prev, { id: messageId, text: 'Sending file...', type: 'text', timestamp: now, isMe: true, fileName: file.name }]);
+        setMessages((prev) => [...prev, { id: messageId, text: '', type, timestamp: now, isMe: true, fileName: file.name, uploading: true }]);
 
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-            const content = ev.target.result;
-            setMessages((prev) => prev.map(msg => msg.id === messageId ? { ...msg, text: content, type, fileName: file.name } : msg));
-            if (convId && messagesStore) {
-                try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text: content, type, timestamp: now, isMe: true, fileName: file.name }); } catch (_) { }
-            } else if (selectedContact.isNew) {
-                pendingRef.current.push({ text: content, type, timestamp: now, fileName: file.name });
-            }
-            socket.emit('send-message-by-email', { fromUserId: myId, toEmail: selectedContact.email, message: content, type, fileName: file.name });
-        };
-        reader.readAsDataURL(file);
+        // Read file as data URL
+        const readFile = () => new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => resolve(ev.target.result);
+            reader.readAsDataURL(file);
+        });
+
+        // Wait for BOTH: file read AND minimum loader duration
+        const [content] = await Promise.all([
+            readFile(),
+            new Promise((resolve) => setTimeout(resolve, MIN_LOADER_MS)),
+        ]);
+
+        // Dismiss loader and show real content
+        setMessages((prev) => prev.map(msg =>
+            msg.id === messageId ? { ...msg, text: content, type, fileName: file.name, uploading: false } : msg
+        ));
+
+        // Persist to IndexedDB
+        if (convId && messagesStore) {
+            try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text: content, type, timestamp: now, isMe: true, fileName: file.name }); } catch (_) { }
+        } else if (selectedContact.isNew) {
+            pendingRef.current.push({ text: content, type, timestamp: now, fileName: file.name });
+        }
+
+        // Emit via socket
+        socket.emit('send-message-by-email', { fromUserId: myId, toEmail: selectedContact.email, message: content, type, fileName: file.name });
     }, [activeUser, selectedContact, convId, messagesStore, contactId]);
 
     const handleClearChat = useCallback(async () => {
