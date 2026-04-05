@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
-import { setActiveUser, setSelectedContact } from '../counterSlice';
+import { setActiveUser, setSelectedContact } from '../../counterSlice';
 import { io } from 'socket.io-client';
 import { useCollection, useLiveQuery } from 'ikago';
-import { getConversationId } from '../services/ikagoDb';
+import { getConversationId } from '../../services/ikagoDb';
 
 const socket = io("https://mes-ioa3.onrender.com/");
 

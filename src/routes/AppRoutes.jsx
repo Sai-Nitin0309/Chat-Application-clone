@@ -1,8 +1,8 @@
 import { Routes, Route } from "react-router-dom"
-import Login from "../components/Login"
-import Register from "../components/Register"
-import OTP from "../components/Otp"
-import HomePage from "../components/HomePage";
+import Login from "../components/Loginpage/Login"
+import Register from "../components/Register/Register"
+import OTP from "../components/otppage/Otp"
+import HomePage from "../components/Homepage/HomePage";
 import Chat from "../components/chat/Chat";
 
 
