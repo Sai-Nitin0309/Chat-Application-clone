@@ -2,7 +2,7 @@ import { Routes, Route } from "react-router-dom"
 import Login from "../components/Loginpage/Login"
 import Register from "../components/Register/Register"
 import OTP from "../components/otppage/Otp"
-import HomePage from "../components/Homepage/HomePage";
+import HomePage from "../components/home/HomePage";
 import Chat from "../components/chat/Chat";
 
 
