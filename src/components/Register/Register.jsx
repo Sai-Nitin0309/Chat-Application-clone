@@ -1,8 +1,8 @@
 import { useState, useRef } from "react"
-import chatting from "../images/Chatting.png"
+import chatting from "../../images/Chatting.png"
 import { useDispatch } from "react-redux"
-import { addUser } from "../counterSlice"
-import { registerUserService } from "../services/userService"
+import { addUser } from "../../counterSlice"
+import { registerUserService } from "../../services/userService"
 import { useNavigate } from "react-router-dom"
 
 const styles = `
@@ -36,9 +36,11 @@ function Register() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [profileImage, setprofileImage] = useState(null)
   const [selectedFile, setSelectedFile] = useState(null)
+
+  // ✅ NEW STATE
+  const [loading, setLoading] = useState(false)
+
   const navigate = useNavigate()
-
-
   const cardRef = useRef(null)
 
   function handleMouseMove(e) {
@@ -66,7 +68,7 @@ function Register() {
     }
   }
 
-  // ✅ FINAL HANDLE SUBMIT
+  // ✅ UPDATED SUBMIT
   async function handleSubmit() {
 
     if (!name || !email || !password || !confirmPassword) {
@@ -87,27 +89,29 @@ function Register() {
     }
 
     try {
+      setLoading(true) // 🔥 start loader
+
       const response = await registerUserService(user)
 
-      // store in Redux
       dispatch(addUser(response || user))
 
       alert("Registered Successfully")
 
-      // clear form
       setName("")
       setEmail("")
       setPassword("")
       setConfirmPassword("")
       setprofileImage(null)
       setSelectedFile(null)
-      navigate("/otp", { state: { email: email } })
 
+      navigate("/otp", { state: { email: email } })
 
     } catch (error) {
       console.error(error)
-      const serverMessage = error.response?.data?.message || "Registration Failed";
-      alert(serverMessage);
+      const serverMessage = error.response?.data?.message || "Registration Failed"
+      alert(serverMessage)
+    } finally {
+      setLoading(false) // 🔥 stop loader
     }
   }
 
@@ -196,11 +200,17 @@ function Register() {
 
                 </div>
 
+                {/* ✅ UPDATED BUTTON */}
                 <button
                   onClick={handleSubmit}
-                  className="bg-[#1a9bbf] text-white py-2 rounded-full font-bold"
+                  disabled={loading}
+                  className="bg-[#1a9bbf] text-white py-2 rounded-full font-bold flex items-center justify-center"
                 >
-                  REGISTER
+                  {loading ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    "REGISTER"
+                  )}
                 </button>
 
               </div>
