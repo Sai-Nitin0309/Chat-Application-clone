@@ -14,6 +14,8 @@ import ChatBackground from './ChatBackground';
 import ErrorNotification from './ErrorNotification';
 
 const SOCKET_URL = "https://mes-ioa3.onrender.com/";
+// const SOCKET_URL = "http://192.168.0.226:5000";
+
 const socket = io(SOCKET_URL);
 
 // Helper: safely get MongoDB id (handles both _id and id)
@@ -87,6 +89,7 @@ const Chat = () => {
         const onStatus = (d) => setOnlineUsers(d.onlineUsers || []);
 
         const onPrivateMsg = async (data) => {
+            console.log(data);
             const me = meRef.current;
             const contact = contactRef.current;
             const mDB = msgsRef.current;
@@ -130,6 +133,7 @@ const Chat = () => {
         };
 
         const onMsgSent = async (data) => {
+            console.log(data);
             setSendError('');
             const me = meRef.current;
             const contact = contactRef.current;
@@ -285,11 +289,11 @@ const Chat = () => {
         <div className="h-screen w-screen flex flex-col bg-[#07090f] text-slate-200 overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
             <ChatBackground />
 
-            <ChatHeader 
-                selectedContact={selectedContact} 
-                activeUser={activeUser} 
-                isOnline={isOnline} 
-                connected={connected} 
+            <ChatHeader
+                selectedContact={selectedContact}
+                activeUser={activeUser}
+                isOnline={isOnline}
+                connected={connected}
                 navigate={navigate}
                 profilePic={profilePic}
                 initials={initials}
@@ -299,21 +303,21 @@ const Chat = () => {
 
             <ErrorNotification error={sendError} onClose={handleErrorClose} />
 
-            <MessageList 
-                messages={messages} 
-                selectedContact={selectedContact} 
-                activeUser={activeUser} 
+            <MessageList
+                messages={messages}
+                selectedContact={selectedContact}
+                activeUser={activeUser}
                 bottomRef={bottomRef}
                 profilePic={profilePic}
                 initials={initials}
                 displayName={displayName}
             />
 
-            <ChatInput 
-                onSend={handleSend} 
-                onFile={handleFile} 
-                displayName={displayName} 
-                selectedContact={selectedContact} 
+            <ChatInput
+                onSend={handleSend}
+                onFile={handleFile}
+                displayName={displayName}
+                selectedContact={selectedContact}
             />
 
             <style>{`

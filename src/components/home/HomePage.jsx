@@ -12,7 +12,8 @@ import ToastBar from './ToastBar';
 import ContextMenuPopup from './ContextMenuPopup';
 import ProfileModal from './ProfileModal';
 
-const socket = io("https://mes-ioa3.onrender.com/");
+// const socket = io("https://mes-ioa3.onrender.com/");
+const socket = io("http://192.168.0.226:5000");
 
 export default function HomePage() {
     const navigate = useNavigate();
