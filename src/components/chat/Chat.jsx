@@ -64,7 +64,7 @@ const Chat = () => {
         if (!convId || !messagesStore) { setMessages([]); return; }
         messagesStore
             .where((m) => m.conversationId === convId)
-            .then((msgs) => setMessages([...msgs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))))
+            .then((msgs) => setMessages([...msgs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)).map(msg => ({ ...msg, status: msg.status || (msg.isMe ? 'delivered' : 'delivered') }))))
             .catch(() => { });
     }, [convId, messagesStore]);
 
@@ -107,14 +107,21 @@ const Chat = () => {
             if (isHere) {
                 setMessages((prev) => [
                     ...prev,
-                    { id: Date.now() + Math.random(), text: data.message, type: data.type || 'text', timestamp, fileName: data.fileName || null, isMe: false },
+                    { id: Date.now() + Math.random(), text: data.message, type: data.type || 'text', timestamp, fileName: data.fileName || null, isMe: false, status: 'delivered' },
                 ]);
+                // Mark sent messages as seen in UI
+                setMessages((prev) => prev.map(msg => msg.isMe && msg.status !== 'seen' ? { ...msg, status: 'seen' } : msg));
             }
 
             // Persist
             if (mDB) {
                 try {
-                    await mDB.add({ conversationId: cId, fromUserId: senderId, toUserId: meId, text: data.message, type: data.type || 'text', timestamp, isMe: false });
+                    await mDB.add({ conversationId: cId, fromUserId: senderId, toUserId: meId, text: data.message, type: data.type || 'text', timestamp, isMe: false, status: 'delivered' });
+                    // Mark all previous sent messages as seen
+                    const sentMsgs = await mDB.where((m) => m.conversationId === cId && m.fromUserId === meId && m.status !== 'seen');
+                    for (const msg of sentMsgs) {
+                        await mDB.update({ ...msg, status: 'seen' });
+                    }
                 } catch (_) { }
             }
 
@@ -123,7 +130,15 @@ const Chat = () => {
                 try {
                     const existing = await cDB.where((c) => c.userId === senderId);
                     if (!existing.length) {
-                        await cDB.add({ userId: senderId, email: data.fromEmail || senderId, name: data.fromName || 'Unknown', unread: isHere ? 0 : 1 });
+                        try {
+                            await cDB.add({ userId: senderId, email: data.fromEmail || senderId, name: data.fromName || 'Unknown', unread: isHere ? 0 : 1 });
+                        } catch (addError) {
+                            if (addError.name === 'ConstraintError') {
+                                console.log('Email already exists, contact not added for userId:', senderId);
+                            } else {
+                                throw addError;
+                            }
+                        }
                     } else if (!isHere) {
                         const c = existing[0];
                         await cDB.update({ ...c, unread: (c.unread || 0) + 1 });
@@ -133,34 +148,58 @@ const Chat = () => {
         };
 
         const onMsgSent = async (data) => {
-            console.log(data);
+            console.log('message-sent event received:', data);
             setSendError('');
             const me = meRef.current;
             const contact = contactRef.current;
             const mDB = msgsRef.current;
             const cDB = contactsRef.current;
-            if (!data.toUserId || !me) return;
+            const toUserId = data.toUserId || data.userId || data.recipientId;
+            if (!toUserId || !me) return;
+
+            // Update message status to delivered
+            setMessages((prev) => prev.map(msg => msg.isMe && msg.status === 'sent' ? { ...msg, status: 'delivered' } : msg));
 
             if (contact?.isNew) {
                 const meId = getId(me);
-                const cId = getConversationId(meId, data.toUserId);
+                const cId = getConversationId(meId, toUserId);
                 if (cDB) {
                     try {
-                        const ex = await cDB.where((c) => c.userId === data.toUserId);
-                        if (!ex.length) await cDB.add({ userId: data.toUserId, email: contact.email, name: contact.name || contact.email });
+                        const ex = await cDB.where((c) => c.userId === toUserId);
+                        if (!ex.length) await cDB.add({ userId: toUserId, email: contact.email, name: contact.name || contact.email });
                     } catch (_) { }
                 }
                 if (mDB && pendingRef.current.length) {
                     for (const pm of pendingRef.current) {
-                        try { await mDB.add({ conversationId: cId, fromUserId: meId, toUserId: data.toUserId, text: pm.text, type: pm.type || 'text', timestamp: pm.timestamp, isMe: true }); } catch (_) { }
+                        try {
+                            await mDB.add({
+                                conversationId: cId,
+                                fromUserId: meId,
+                                toUserId,
+                                text: pm.text,
+                                type: pm.type || 'text',
+                                timestamp: pm.timestamp,
+                                isMe: true,
+                                status: 'sent'
+                            });
+                        } catch (_) { }
                     }
                     pendingRef.current = [];
                 }
-                dispatch(setSelectedContact({ ...contact, userId: data.toUserId, isNew: false }));
+                dispatch(setSelectedContact({ ...contact, userId: toUserId, isNew: false }));
+            }
+
+            // Update DB status to delivered
+            if (mDB && convId) {
+                const sentMsgs = await mDB.where((m) => m.conversationId === convId && m.status === 'sent');
+                for (const msg of sentMsgs) {
+                    await mDB.update({ ...msg, status: 'delivered' });
+                }
             }
         };
 
         const onMsgFailed = (d) => {
+            console.log('message-failed event received:', d);
             setSendError(d.reason || 'Message failed — user not found');
             pendingRef.current = [];
             setTimeout(() => setSendError(''), 5000);
@@ -190,17 +229,17 @@ const Chat = () => {
         const myId = getId(activeUser);
 
         // Optimistic UI
-        setMessages((prev) => [...prev, { id: Date.now(), text, type: 'text', timestamp: now, isMe: true }]);
+        setMessages((prev) => [...prev, { id: Date.now(), text, type: 'text', timestamp: now, isMe: true, status: 'sent' }]);
 
         // Persist
         if (convId && messagesStore) {
-            try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text, type: 'text', timestamp: now, isMe: true }); } catch (_) { }
+            try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text, type: 'text', timestamp: now, isMe: true, status: 'sent' }); } catch (_) { }
         } else if (selectedContact.isNew) {
-            pendingRef.current.push({ text, type: 'text', timestamp: now });
+            pendingRef.current.push({ text, type: 'text', timestamp: now, status: 'sent' });
         }
 
         // Emit
-        socket.emit('send-message-by-email', { fromUserId: myId, toEmail: selectedContact.email, message: text, type: 'text' });
+        socket.emit('send-message-by-email', { fromUserId: myId, fromEmail: activeUser.email, toEmail: selectedContact.email, message: text, type: 'text' });
     }, [activeUser, selectedContact, convId, messagesStore, contactId]);
 
     const handleFile = useCallback(async (e) => {
@@ -223,7 +262,7 @@ const Chat = () => {
         const MIN_LOADER_MS = 6000; // show loader for at least 6 seconds
 
         const messageId = Date.now();
-        setMessages((prev) => [...prev, { id: messageId, text: '', type, timestamp: now, isMe: true, fileName: file.name, uploading: true }]);
+        setMessages((prev) => [...prev, { id: messageId, text: '', type, timestamp: now, isMe: true, fileName: file.name, uploading: true, status: 'sent' }]);
 
         // Read file as data URL
         const readFile = () => new Promise((resolve) => {
@@ -245,13 +284,13 @@ const Chat = () => {
 
         // Persist to IndexedDB
         if (convId && messagesStore) {
-            try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text: content, type, timestamp: now, isMe: true, fileName: file.name }); } catch (_) { }
+            try { await messagesStore.add({ conversationId: convId, fromUserId: myId, toUserId: contactId, text: content, type, timestamp: now, isMe: true, fileName: file.name, status: 'sent' }); } catch (_) { }
         } else if (selectedContact.isNew) {
-            pendingRef.current.push({ text: content, type, timestamp: now, fileName: file.name });
+            pendingRef.current.push({ text: content, type, timestamp: now, fileName: file.name, status: 'sent' });
         }
 
         // Emit via socket
-        socket.emit('send-message-by-email', { fromUserId: myId, toEmail: selectedContact.email, message: content, type, fileName: file.name });
+        socket.emit('send-message-by-email', { fromUserId: myId, fromEmail: activeUser.email, toEmail: selectedContact.email, message: content, type, fileName: file.name });
     }, [activeUser, selectedContact, convId, messagesStore, contactId]);
 
     const handleClearChat = useCallback(async () => {

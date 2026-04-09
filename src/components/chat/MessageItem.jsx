@@ -106,6 +106,11 @@ const MessageItem = ({ msg, selectedContact, activeUser, profilePic, initials })
 
                 <p style={{ margin: '6px 0 0', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.4, textAlign: msg.isMe ? 'right' : 'left' }}>
                     {msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                    {msg.isMe && (
+                        <span style={{ marginLeft: 4, color: msg.status === 'seen' ? '#ff0000' : '#ffffff', opacity: msg.status === 'seen' ? 1 : 0.6 }}>
+                            {msg.status === 'sent' ? '✓' : '✓✓'}
+                        </span>
+                    )}
                 </p>
             </div>
 

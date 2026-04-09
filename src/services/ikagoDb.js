@@ -24,7 +24,8 @@ export const DB_SCHEMA = {
       text:           {},
       type:           {},
       timestamp:      {},
-      isMe:           {}
+      isMe:           {},
+      status:         {} // 'sent', 'delivered', 'seen'
     }
   }
 };
