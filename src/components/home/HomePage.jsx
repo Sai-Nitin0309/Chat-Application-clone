@@ -12,8 +12,8 @@ import ToastBar from './ToastBar';
 import ContextMenuPopup from './ContextMenuPopup';
 import ProfileModal from './ProfileModal';
 
-// const socket = io("https://mes-ioa3.onrender.com/");
-const socket = io("http://192.168.0.226:5000");
+const socket = io("https://mes-ioa3.onrender.com/");
+// const socket = io("http://192.168.0.226:5000");
 
 export default function HomePage() {
     const navigate = useNavigate();
@@ -79,6 +79,13 @@ export default function HomePage() {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [chatMessages]);
 
+    // ── REQUEST NOTIFICATION PERMISSION ──
+    useEffect(() => {
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+    }, []);
+
     // ── SOCKET SETUP ──
     useEffect(() => {
         if (!activeUser) { navigate('/'); return; }
@@ -101,7 +108,19 @@ export default function HomePage() {
                 try {
                     const existing = await cDB.where(c => c.userId === data.fromUserId);
                     if (!existing.length) {
-                        await cDB.add({ userId: data.fromUserId, email: data.fromEmail || data.fromUserId, name: data.fromName || data.fromEmail || 'Unknown', unread: isActiveChat ? 0 : 1, isRequest: true });
+                        try {
+                            await cDB.add({ userId: data.fromUserId, email: data.fromEmail || data.fromUserId, name: data.fromName || data.fromEmail || 'Unknown', unread: isActiveChat ? 0 : 1, isRequest: true });
+                            // Special notification for new user
+                            if ('Notification' in window && Notification.permission === 'granted') {
+                                new Notification('New contact added', { body: `${data.fromName || data.fromEmail || 'Someone'} sent you a message and was added to your chat list.` });
+                            }
+                        } catch (addError) {
+                            if (addError.name === 'ConstraintError') {
+                                console.log('Email already exists, contact not added for userId:', data.fromUserId);
+                            } else {
+                                throw addError;
+                            }
+                        }
                     } else if (!isActiveChat) {
                         const c = existing[0];
                         await cDB.update({ ...c, unread: (c.unread || 0) + 1 });
@@ -120,6 +139,13 @@ export default function HomePage() {
                         const senderLabel = data.fromName && data.fromName !== 'User' ? data.fromName : (data.fromEmail || 'Someone');
                         setNotifications(prev => [...prev, { id: notifId, fromUserId: data.fromUserId, senderLabel, message: data.type === 'text' ? data.message : `Sent a ${data.type || 'file'}`, type: data.type || 'text' }]);
                         setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notifId)), 6000);
+
+                        // Browser push notification
+                        if ('Notification' in window && Notification.permission === 'granted') {
+                            const title = `New message from ${senderLabel}`;
+                            const body = data.type === 'text' ? data.message : `Sent a ${data.type || 'file'}`;
+                            new Notification(title, { body });
+                        }
                     }
                 } catch (e) { console.error('Message save error:', e); }
             }
@@ -135,7 +161,17 @@ export default function HomePage() {
             if (selected?.isNew && cDB) {
                 try {
                     const existing = await cDB.where(c => c.userId === data.toUserId);
-                    if (!existing.length) await cDB.add({ userId: data.toUserId, email: selected.email, name: selected.name || selected.email });
+                    if (!existing.length) {
+                        try {
+                            await cDB.add({ userId: data.toUserId, email: selected.email, name: selected.name || selected.email });
+                        } catch (addError) {
+                            if (addError.name === 'ConstraintError') {
+                                console.log('Email already exists, contact not added for new chat');
+                            } else {
+                                throw addError;
+                            }
+                        }
+                    }
                     if (mDB && pendingMsgsRef.current.length > 0) {
                         const convId = getConversationId(me._id, data.toUserId);
                         for (const pm of pendingMsgsRef.current) {
